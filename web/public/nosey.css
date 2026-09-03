@@ -1,0 +1,169 @@
+:root {
+    --ink: #f5f7ff;
+    --muted: rgba(245, 247, 255, 0.72);
+    --card-bg: rgba(18, 20, 38, 0.42);
+    --card-brd: rgba(255, 255, 255, 0.18);
+    --accent: #7c5cff;
+    --accent-2: #ff5ca8;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    height: 100%;
+}
+
+body {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 6vmin;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    overflow: hidden;
+    background:
+        radial-gradient(60vmax 60vmax at 18% 22%, #3b2f8f 0%, transparent 60%),
+        radial-gradient(55vmax 55vmax at 82% 28%, #b0347a 0%, transparent 55%),
+        radial-gradient(70vmax 70vmax at 50% 96%, #0e7c86 0%, transparent 60%),
+        linear-gradient(140deg, #0b1020, #12122b 45%, #1a0f2b 100%);
+    background-size: 200% 200%, 200% 200%, 200% 200%, 100% 100%;
+    animation: drift 26s ease-in-out infinite alternate;
+}
+
+@keyframes drift {
+    0%   { background-position: 0% 0%,   100% 0%,  50% 100%, 0 0; }
+    50%  { background-position: 40% 30%, 60% 40%,  30% 70%,  0 0; }
+    100% { background-position: 100% 100%, 0% 60%, 70% 40%,  0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body { animation: none; }
+}
+
+/* ── Glass card (visitor + messages) ───────────────────────── */
+.card {
+    width: min(560px, 92vw);
+    padding: clamp(1.6rem, 4vmin, 2.8rem);
+    text-align: center;
+    background: var(--card-bg);
+    border: 1px solid var(--card-brd);
+    border-radius: 22px;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    animation: rise 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes rise {
+    from { opacity: 0; transform: translateY(14px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+}
+
+.card h1 {
+    margin: 0 0 0.35em;
+    font-size: clamp(1.9rem, 6vmin, 3rem);
+    letter-spacing: -0.02em;
+    background: linear-gradient(120deg, #fff, #d8ccff 55%, #ffc6e6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.subtitle { margin: 0 0 1.4em; color: var(--muted); font-size: clamp(0.95rem, 2.6vmin, 1.1rem); }
+.nudge { margin: 0 0 1em; color: #ffd0e0; font-size: 0.95rem; }
+
+.row { display: flex; gap: 0.6rem; }
+
+input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 0.9rem 1.1rem;
+    font-size: 1rem;
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--card-brd);
+    border-radius: 14px;
+    outline: none;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+input[type="text"]::placeholder { color: rgba(245, 247, 255, 0.5); }
+
+input[type="text"]:focus {
+    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.12);
+}
+
+button {
+    padding: 0.9rem 1.4rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    border: 0;
+    border-radius: 14px;
+    background: linear-gradient(120deg, var(--accent), var(--accent-2));
+    box-shadow: 0 10px 24px rgba(124, 92, 255, 0.45);
+    transition: transform 0.12s ease, box-shadow 0.2s ease;
+}
+
+button:hover  { transform: translateY(-1px); box-shadow: 0 14px 30px rgba(124, 92, 255, 0.55); }
+button:active { transform: translateY(0); }
+
+.thanks h1 { font-size: clamp(2.4rem, 8vmin, 4rem); }
+
+/* ── Owner / QR view ───────────────────────────────────────── */
+.owner {
+    display: grid;
+    place-items: center;
+    gap: 1rem;
+    padding: clamp(1.4rem, 4vmin, 2.4rem);
+    background: rgba(255, 255, 255, 0.96);
+    border-radius: 24px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.owner #qr { width: min(70vmin, 420px); }
+.owner #qr svg { width: 100%; height: auto; display: block; }
+.owner .qr-url { margin: 0; max-width: min(70vmin, 420px); word-break: break-all; }
+.owner code { color: #33366b; font-size: 0.8rem; }
+.owner .hint { margin: 0; color: #6b6f93; font-size: 0.85rem; }
+
+/* ── OI! + Spline wave reveal ──────────────────────────────── */
+.screen-oi { padding: 0; }
+
+#oi {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 6vmin;
+    z-index: 2;
+    transition: opacity 1.4s ease, filter 1.4s ease;
+}
+
+#oi h1 {
+    margin: 0;
+    font-size: clamp(2.4rem, 10vmin, 6rem);
+    letter-spacing: -0.02em;
+    text-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    background: linear-gradient(120deg, #fff, #ffc6e6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+#oi.gone { opacity: 0; filter: blur(12px); pointer-events: none; }
+
+#wave {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 1.6s ease;
+}
+
+#wave.show { opacity: 1; }
+#wave spline-viewer, #wave canvas { width: 100%; height: 100%; display: block; }

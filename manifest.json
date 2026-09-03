@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "wizwam.omanosey",
+  "name": "OmaNosey",
+  "version": "1.0.0",
+  "author": "Wizwam",
+  "license": "MIT",
+  "homepage": "https://github.com/lukejmorrison/omanosey",
+  "description": "Puts Nosey Bugger on the Omarchy screensaver: a fullscreen QR honeypot so anyone who peeks at an unattended screen can leave a note.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaNosey",
+    "description": "Idle screensaver shows a scannable Nosey QR. Preview, toggle idle, set a public URL.",
+    "category": "System",
+    "aliases": [
+      "omanosey",
+      "nosey",
+      "screensaver",
+      "qr",
+      "honeypot",
+      "unattended"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "idle": true,
+      "publicUrl": "https://e1.yahvehyireh.com",
+      "port": 8765
+    },
+    "schema": [
+      {
+        "key": "idle",
+        "type": "boolean",
+        "label": "Use as idle screensaver",
+        "description": "When on, idle launches Nosey instead of the ASCII / Kingdom Age screensaver. Off restores the previous launcher.",
+        "defaultValue": true
+      },
+      {
+        "key": "publicUrl",
+        "type": "string",
+        "label": "Public Nosey URL",
+        "description": "If this host serves ?unattended, the screensaver kiosks it so phone scans work off-LAN. Otherwise OmaNosey uses the local server and a LAN QR.",
+        "defaultValue": "https://e1.yahvehyireh.com"
+      },
+      {
+        "key": "port",
+        "type": "integer",
+        "label": "Local server port",
+        "min": 1024,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 8765,
+        "description": "Local honeypot bind port. QR uses your LAN address so people in the room can scan."
+      }
+    ]
+  }
+}

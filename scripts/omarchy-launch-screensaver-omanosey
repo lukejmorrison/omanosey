@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Launch Nosey as the Omarchy screensaver (class org.omarchy.screensaver).
+set -euo pipefail
+
+here=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+plugin=$(CDPATH= cd -- "$here/.." && pwd)
+python=${OMANOSEY_PYTHON:-/usr/bin/python3}
+window="$plugin/backend/window.py"
+server="$plugin/backend/server.py"
+
+pgrep -f '[o]rg.omarchy.screensaver' >/dev/null 2>&1 && exit 0
+
+if command -v omarchy-toggle-enabled >/dev/null 2>&1; then
+  if omarchy-toggle-enabled screensaver-off && [[ ${1:-} != force ]]; then
+    exit 1
+  fi
+fi
+
+url=$("$python" "$server" url) || {
+  echo "omanosey: could not resolve kiosk URL" >&2
+  exit 1
+}
+
+hypr_focus_monitor() {
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 || hyprctl dispatch focusmonitor "$1" >/dev/null
+}
+
+hypr_exec() {
+  local command
+  printf -v command '%q ' "$@"
+  hyprctl dispatch "hl.dsp.exec_cmd([[$command]])" >/dev/null 2>&1 || hyprctl dispatch exec -- bash -lc "$command" >/dev/null
+}
+
+SOCKET="$XDG_RUNTIME_DIR/hypr/${HYPRLAND_INSTANCE_SIGNATURE:-}/.socket2.sock"
+if [[ -S $SOCKET ]]; then
+  exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
+else
+  events=
+fi
+
+wait_for_screensaver_window() {
+  [[ -n $events ]] || { sleep 0.25; return 0; }
+  local line deadline=$((SECONDS + 5))
+  while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
+    [[ $line == openwindow\>\>*,org.omarchy.screensaver,* ]] && return 0
+  done
+}
+
+focused=$(omarchy-hyprland-monitor-focused 2>/dev/null || true)
+
+for m in $(hyprctl monitors -j | jq -r '.[].name'); do
+  hypr_focus_monitor "$m"
+  hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m"
+  wait_for_screensaver_window
+done
+
+if [[ -n $focused ]]; then
+  hypr_focus_monitor "$focused"
+fi

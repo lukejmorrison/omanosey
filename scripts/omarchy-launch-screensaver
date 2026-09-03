@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Dispatcher: idle Nosey when enabled, otherwise the previous Omarchy screensaver.
+set -euo pipefail
+
+here=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+plugin=$(CDPATH= cd -- "$here/.." && pwd)
+python=${OMANOSEY_PYTHON:-/usr/bin/python3}
+config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/omanosey/config.json"
+prev="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/omanosey/previous-launch"
+
+idle_on() {
+  [[ -f $config ]] || return 0
+  "$python" - "$config" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.loads(open(path, encoding="utf-8").read())
+except Exception:
+    sys.exit(0)
+sys.exit(0 if data.get("idle", True) else 1)
+PY
+}
+
+if idle_on; then
+  exec "$here/omarchy-launch-screensaver-omanosey" "$@"
+fi
+
+if [[ -f $prev ]]; then
+  target=$(tr -d '\n' < "$prev")
+  if [[ -x $target ]]; then
+    exec "$target" "$@"
+  fi
+fi
+
+if [[ -x /usr/bin/omarchy-launch-screensaver ]]; then
+  exec /usr/bin/omarchy-launch-screensaver "$@"
+fi
+
+echo "omanosey: no previous screensaver launcher" >&2
+exit 1
