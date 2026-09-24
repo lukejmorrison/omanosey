@@ -11,7 +11,7 @@ command -v omarchy >/dev/null 2>&1 || {
 
 omarchy plugin validate .
 
-python3 -m py_compile backend/config.py backend/server.py
+python3 -m py_compile backend/config.py backend/server.py backend/debuglog.py
 /usr/bin/python3 -m py_compile backend/window.py
 
 python3 -m unittest discover -s tests -v

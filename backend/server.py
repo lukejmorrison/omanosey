@@ -36,6 +36,7 @@ from config import (  # noqa: E402
     state_dir,
     web_root,
 )
+from debuglog import log_path, recent_events  # noqa: E402
 
 NONCE_TTL = 7 * 24 * 3600
 COOKIE_TTL = 365 * 24 * 3600
@@ -542,6 +543,8 @@ def status_payload() -> dict[str, Any]:
         "port": int(cfg["port"]),
         "lan_ip": lan_ip(),
         "plugin_root": str(plugin_root()),
+        "debug_log": str(log_path()),
+        "last_events": recent_events(8),
     }
 
 

@@ -21,6 +21,8 @@ Item {
   property string statusText: "Checking…"
   property string lastError: ""
   property string actionStatus: ""
+  property string debugLog: ""
+  property var lastEvents: []
 
   readonly property string helperPath: resolvedHelper()
   readonly property string python: "/usr/bin/python3"
@@ -74,14 +76,26 @@ Item {
     kioskUrl = parsed.kioskUrl
     lanIp = parsed.lanIp
     port = parsed.port
+    debugLog = parsed.debugLog || ""
+    lastEvents = parsed.lastEvents || []
     if (publicLive) statusText = "Public Nosey live"
     else if (local) statusText = "Local honeypot on " + lanIp + ":" + port
     else statusText = "Starting local honeypot…"
   }
 
   function preview() {
-    actionStatus = "Previewing…"
-    previewProcess.command = ["bash", "-lc", "omarchy-launch-screensaver force"]
+    launchScreensaver(false)
+  }
+
+  function debugPreview() {
+    launchScreensaver(true)
+  }
+
+  function launchScreensaver(debugHold) {
+    if (previewProcess.running) return
+    actionStatus = debugHold ? "Debug preview…" : "Previewing…"
+    var command = debugHold ? "omarchy-launch-screensaver force debug" : "omarchy-launch-screensaver force"
+    previewProcess.command = ["bash", "-lc", command]
     previewProcess.running = true
   }
 

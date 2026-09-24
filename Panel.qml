@@ -168,6 +168,53 @@ Panel {
           }
         }
 
+        Item {
+          width: parent.width
+          height: debugHit.implicitHeight
+          Text {
+            id: debugHit
+            text: "Debug preview (hold open)"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: nosey.debugPreview()
+          }
+        }
+
+        Text {
+          visible: nosey.actionStatus !== ""
+          width: parent.width
+          text: nosey.actionStatus
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          width: parent.width
+          text: nosey.debugLog !== "" ? ("Debug log: " + nosey.debugLog) : "Debug log appears after the screensaver starts."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          visible: nosey.lastEvents.length > 0
+          width: parent.width
+          text: nosey.lastEvents.join("\n")
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WrapAnywhere
+        }
+
         Text {
           width: parent.width
           text: nosey.publicLive
@@ -181,7 +228,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "Right-click the chip to preview. Middle-click toggles idle. Any key or mouse movement dismisses, same as stock Omarchy."
+          text: "Right-click the chip to preview. Debug preview holds the screen until Esc and logs what would have dismissed it. Middle-click toggles idle. Any key or mouse movement dismisses a normal preview."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

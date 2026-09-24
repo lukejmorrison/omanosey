@@ -31,6 +31,8 @@ function parseStatus(raw) {
       local: data.local === true,
       port: data.port || 8765,
       lanIp: data.lan_ip || "",
+      debugLog: data.debug_log || "",
+      lastEvents: Array.isArray(data.last_events) ? data.last_events : [],
       lastError: data.lastError || ""
     }
   } catch (error) {

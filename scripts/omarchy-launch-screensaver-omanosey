@@ -8,6 +8,10 @@ python=${OMANOSEY_PYTHON:-/usr/bin/python3}
 window="$plugin/backend/window.py"
 server="$plugin/backend/server.py"
 
+event() {
+  "$python" "$plugin/backend/debuglog.py" event "$@" || true
+}
+
 pgrep -f '[o]rg.omarchy.screensaver' >/dev/null 2>&1 && exit 0
 
 if command -v omarchy-toggle-enabled >/dev/null 2>&1; then
@@ -20,6 +24,15 @@ url=$("$python" "$server" url) || {
   echo "omanosey: could not resolve kiosk URL" >&2
   exit 1
 }
+
+debug=0
+if [[ ${OMANOSEY_DEBUG:-} == 1 || ${1:-} == debug || ${2:-} == debug ]]; then
+  debug=1
+fi
+event launch url="$url" debug="$debug"
+if [[ $debug == 1 ]]; then
+  echo "omanosey: debug hold on; Esc dismisses. Log: ${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/omanosey/screensaver.log" >&2
+fi
 
 hypr_focus_monitor() {
   hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 || hyprctl dispatch focusmonitor "$1" >/dev/null
@@ -44,16 +57,28 @@ wait_for_screensaver_window() {
   while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
     [[ $line == openwindow\>\>*,org.omarchy.screensaver,* ]] && return 0
   done
+  return 1
 }
 
 focused=$(omarchy-hyprland-monitor-focused 2>/dev/null || true)
 
 for m in $(hyprctl monitors -j | jq -r '.[].name'); do
+  event focus-monitor monitor="$m"
   hypr_focus_monitor "$m"
-  hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m"
-  wait_for_screensaver_window
+  event spawn monitor="$m" debug="$debug"
+  if [[ $debug == 1 ]]; then
+    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m" --debug
+  else
+    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m"
+  fi
+  if wait_for_screensaver_window; then
+    event window-mapped monitor="$m"
+  else
+    event window-timeout monitor="$m"
+  fi
 done
 
 if [[ -n $focused ]]; then
+  event refocus monitor="$focused"
   hypr_focus_monitor "$focused"
 fi
