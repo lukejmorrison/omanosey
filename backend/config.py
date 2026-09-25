@@ -24,6 +24,16 @@ STRING_DEFAULTS = {
     "expired_sub": "This little link has wandered off.",
 }
 
+# Shown on repeat visits (index 0 = first return after a ban). Falls through to last.
+AGAIN_LINES = (
+    "OI! isn't once enough?!",
+    "Back already? The QR isn't a revolving door.",
+    "Third time's a confession. Spill it.",
+    "You're collecting stamps on the Nosey loyalty card.",
+    "At this point I'm charging rent for your eyeballs.",
+    "Fine. Leave another note. Make it good.",
+)
+
 
 def xdg_config() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -65,6 +75,7 @@ def default_config() -> dict[str, Any]:
     return {
         "idle": DEFAULT_IDLE,
         "public_url": DEFAULT_PUBLIC_URL,
+        "phone_base": "",
         "port": DEFAULT_PORT,
         "bind": "0.0.0.0",
         "spline_scene": "",
@@ -87,6 +98,7 @@ def load_config() -> dict[str, Any]:
     data["port"] = port
     data["idle"] = bool(data.get("idle", DEFAULT_IDLE))
     data["public_url"] = str(data.get("public_url") or "").rstrip("/")
+    data["phone_base"] = str(data.get("phone_base") or "").rstrip("/")
     data["bind"] = str(data.get("bind") or "0.0.0.0")
     data["spline_scene"] = str(data.get("spline_scene") or "")
     return data

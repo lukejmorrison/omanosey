@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
 import os
+import struct
 import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -27,7 +30,9 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+from camera import snap as camera_snap, snap_path  # noqa: E402
 from config import (  # noqa: E402
+    AGAIN_LINES,
     load_config,
     load_strings,
     plugin_root,
@@ -36,9 +41,11 @@ from config import (  # noqa: E402
     state_dir,
     web_root,
 )
-from debuglog import log_path, recent_events  # noqa: E402
+from live import Hub, ScreenLead, accept_key, encode_frame, encode_pong, read_frame  # noqa: E402
 
-NONCE_TTL = 7 * 24 * 3600
+NONCE_TTL = 120
+LIVE = Hub()
+SCREENS = ScreenLead()
 COOKIE_TTL = 365 * 24 * 3600
 COOKIE_NAME = "seen"
 HEALTH_PATH = "/healthz"
@@ -145,6 +152,36 @@ def nonce_valid(nonce: str, files: dict[str, Path]) -> bool:
     return found
 
 
+def nonce_burn(nonce: str, files: dict[str, Path]) -> None:
+    if not files["nonces"].is_file():
+        return
+    kept: list[str] = []
+    for line in files["nonces"].read_text(encoding="utf-8").splitlines():
+        n = line.split("\t", 1)[0] if line.strip() else ""
+        if n and not hmac.compare_digest(n.lower(), nonce.lower()):
+            kept.append(line)
+    files["nonces"].write_text(("\n".join(kept) + ("\n" if kept else "")), encoding="utf-8")
+
+
+def ban_count(ip: str, files: dict[str, Path]) -> int:
+    if not files["banned"].is_file():
+        return 0
+    count = 0
+    for line in files["banned"].read_text(encoding="utf-8").splitlines():
+        cols = line.split("\t")
+        if len(cols) > 1 and cols[1] == ip:
+            count += 1
+    return count
+
+
+def again_line(ip: str, files: dict[str, Path], strings: dict[str, str]) -> str:
+    # ban_count is visits that already left a note; first return uses index 0.
+    idx = max(0, ban_count(ip, files) - 1)
+    if idx < len(AGAIN_LINES):
+        return AGAIN_LINES[idx]
+    return AGAIN_LINES[-1] if AGAIN_LINES else strings.get("again", "OI!")
+
+
 def is_banned(ip: str, cookie_val: str, files: dict[str, Path]) -> bool:
     if cookie_val:
         plain = decrypt(cookie_val, files)
@@ -172,14 +209,43 @@ def ban_visitor(ip: str, ua: str, files: dict[str, Path], secure: bool) -> str:
     return value
 
 
-def save_reply(comment: str, nonce: str, ip: str, ua: str, files: dict[str, Path]) -> None:
-    line = json.dumps(
-        {"ts": _iso(), "ip": ip, "nonce": nonce, "ua": ua[:512], "comment": comment},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+def save_reply(comment: str, nonce: str, ip: str, ua: str, files: dict[str, Path]) -> dict[str, str]:
+    row = {
+        "ts": _iso(),
+        "ip": ip,
+        "nonce": nonce,
+        "ua": ua[:512],
+        "comment": comment,
+    }
+    line = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
     with files["replies"].open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
+    return row
+
+
+def recent_replies(files: dict[str, Path], limit: int = 40) -> list[dict[str, Any]]:
+    path = files["replies"]
+    if not path.is_file() or limit < 1:
+        return []
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("comment"):
+            out.append(
+                {
+                    "ts": str(data.get("ts") or ""),
+                    "ip": str(data.get("ip") or ""),
+                    "comment": str(data.get("comment") or "")[:500],
+                }
+            )
+    return out
 
 
 def layout(title: str, body_class: str, inner: str, scripts: str = "") -> str:
@@ -196,22 +262,22 @@ def layout(title: str, body_class: str, inner: str, scripts: str = "") -> str:
     )
 
 
-def render_unattended(url: str) -> str:
+def render_unattended(url: str, *, monitor: str = "") -> str:
     inner = (
-        '<main class="owner">'
+        '<canvas id="matrix" aria-hidden="true"></canvas>'
+        '<div id="thunder" aria-hidden="true"></div>'
+        '<main class="owner" id="qr-plate">'
         '<div id="qr" aria-label="QR code"></div>'
-        '<p class="qr-url"><code id="qrurl"></code></p>'
-        '<p class="hint">Leave this on screen. Scan to see what the nosey ones do.</p>'
         "</main>"
+        '<div id="alarm"><h1>I&rsquo;ve just been scanned.</h1><p>Nosey bugger.</p></div>'
     )
     scripts = (
         '<script src="/public/qrcode.min.js"></script>'
-        "<script>(function(){"
-        f"var url={json.dumps(url)};"
-        'var qr=qrcode(0,"M");qr.addData(url);qr.make();'
-        'document.getElementById("qr").innerHTML=qr.createSvgTag({cellSize:6,margin:2,scalable:true});'
-        'document.getElementById("qrurl").textContent=url;'
-        "})();</script>"
+        f'<script>document.body.dataset.live="screen";'
+        f"document.body.dataset.qr={json.dumps(url)};"
+        f"document.body.dataset.monitor={json.dumps(monitor)};</script>"
+        '<script src="/public/matrix.js"></script>'
+        '<script src="/public/live.js"></script>'
     )
     return layout("Unattended", "screen-owner", inner, scripts)
 
@@ -226,15 +292,25 @@ def render_form(nonce: str, strings: dict[str, str], nudge: bool = False) -> str
         '<main class="card">'
         f"<h1>{escape(strings['title'])}</h1>"
         f'<p class="subtitle">{escape(strings["subtitle"])}</p>'
+        f'<figure class="snap" data-nonce={json.dumps(nonce)}>'
+        '<img id="snap" alt="Looking at you" hidden>'
+        "<figcaption>Smile — you&rsquo;re on the unattended camera.</figcaption>"
+        "</figure>"
         f"{err}"
         f'<form method="post" action="?rand={escape(nonce)}" autocomplete="off">'
         f'<input type="hidden" name="nonce" value="{escape(nonce)}">'
         '<div class="row">'
         f'<input type="text" name="comment" maxlength="500" placeholder="{escape(strings["placeholder"])}" autofocus>'
         f'<button type="submit">{escape(strings["send"])}</button>'
-        "</div></form></main>"
+        "</div></form>"
+        '<button type="button" id="talk">Hold to talk</button>'
+        "</main>"
     )
-    return layout(strings["title"], "screen-visitor", inner)
+    scripts = (
+        f'<script>document.body.dataset.live="visitor";document.body.dataset.nonce={json.dumps(nonce)};</script>'
+        '<script src="/public/live.js"></script>'
+    )
+    return layout(strings["title"], "screen-visitor", inner, scripts)
 
 
 def render_thanks(strings: dict[str, str]) -> str:
@@ -257,16 +333,90 @@ def render_expired(strings: dict[str, str]) -> str:
     return layout(strings["expired"], "screen-visitor", inner)
 
 
-def render_oi(strings: dict[str, str], scene: str) -> str:
+def render_desk() -> str:
     inner = (
-        f'<div id="oi"><h1>{escape(strings["again"])}</h1></div>'
+        '<main class="card desk">'
+        "<h1>Nosey desk</h1>"
+        '<p class="subtitle">Leave this open on your phone. A scan rings here, and you can talk back.</p>'
+        '<p id="live-status" class="subtitle">Connecting…</p>'
+        '<button type="button" id="arm">Tap to arm alerts</button>'
+        '<button type="button" id="talk" disabled>Hold to talk</button>'
+        '<section id="alert-panel" class="alert-panel" hidden>'
+        '<p class="alert-kicker">I&rsquo;ve just been scanned.</p>'
+        '<img id="alert-snap" class="alert-snap" alt="Camera snap" hidden>'
+        '<p id="alert-note" class="alert-note">Nosey bugger.</p>'
+        '<button type="button" id="alarm-dismiss">Dismiss</button>'
+        "</section>"
+        "<h2>Messages</h2>"
+        '<ul id="messages" class="messages"></ul>'
+        "</main>"
+    )
+    scripts = '<script>document.body.dataset.live="desk";</script><script src="/public/live.js"></script>'
+    return layout("Nosey desk", "screen-visitor", inner, scripts)
+
+
+def render_oi(
+    strings: dict[str, str],
+    scene: str,
+    *,
+    line: str,
+    nonce: str = "",
+) -> str:
+    form = ""
+    if nonce:
+        form = (
+            '<main class="card oi-form">'
+            f"<h1>{escape(line)}</h1>"
+            f'<p class="subtitle">{escape(strings["subtitle"])}</p>'
+            f'<figure class="snap" data-nonce={json.dumps(nonce)}>'
+            '<img id="snap" alt="Looking at you" hidden>'
+            "<figcaption>Smile — you&rsquo;re on the unattended camera.</figcaption>"
+            "</figure>"
+            f'<form method="post" action="?rand={escape(nonce)}" autocomplete="off">'
+            f'<input type="hidden" name="nonce" value="{escape(nonce)}">'
+            '<div class="row">'
+            f'<input type="text" name="comment" maxlength="500" placeholder="{escape(strings["placeholder"])}" autofocus>'
+            f'<button type="submit">{escape(strings["send"])}</button>'
+            "</div></form>"
+            '<button type="button" id="talk">Hold to talk</button>'
+            "</main>"
+        )
+        scripts = (
+            f'<script>document.body.dataset.live="visitor";document.body.dataset.nonce={json.dumps(nonce)};</script>'
+            '<script src="/public/live.js"></script>'
+        )
+        return layout(line, "screen-visitor", form, scripts)
+    inner = (
+        f'<div id="oi"><h1>{escape(line)}</h1></div>'
         f'<div id="wave" data-scene="{escape(scene)}"></div>'
     )
     scripts = '<script src="/public/wave.js"></script>'
-    return layout(strings["again"], "screen-oi", inner, scripts)
+    return layout(line, "screen-oi", inner, scripts)
+
+
+def _iface_ipv4(name: str) -> str | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        info = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack("256s", name.encode()[:15]))
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return socket.inet_ntoa(info[20:24])
 
 
 def lan_ip() -> str:
+    wireless: list[str] = []
+    net = Path("/sys/class/net")
+    if net.is_dir():
+        for iface in sorted(net.iterdir()):
+            if not (iface / "wireless").exists():
+                continue
+            addr = _iface_ipv4(iface.name)
+            if addr and not addr.startswith("127."):
+                wireless.append(addr)
+    if wireless:
+        return wireless[0]
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("1.1.1.1", 80))
@@ -379,6 +529,48 @@ class NoseyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/ws":
+            self._websocket()
+            return
+        if parsed.path == "/ticket":
+            nonce = nonce_new(self.files)
+            url = self._base_url() + "?rand=" + nonce
+            self._send(200, json.dumps({"url": url, "ttl": NONCE_TTL}), "application/json; charset=utf-8")
+            return
+        if parsed.path == "/replies":
+            self._send(
+                200,
+                json.dumps({"replies": recent_replies(self.files)}),
+                "application/json; charset=utf-8",
+            )
+            return
+        if parsed.path == "/desk-state":
+            state = LIVE.desk_state()
+            scan = state.get("scan") or {}
+            nonce = str(scan.get("nonce") or "")
+            path = snap_path(nonce) if nonce else None
+            state["snap"] = bool(path)
+            if path:
+                state["snap_url"] = f"/snap/{nonce}.jpg"
+            self._send(200, json.dumps(state), "application/json; charset=utf-8")
+            return
+        if parsed.path == "/screen-lead":
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            monitor = (qs.get("monitor") or [""])[0]
+            self._send(
+                200,
+                json.dumps(SCREENS.ping(monitor)),
+                "application/json; charset=utf-8",
+            )
+            return
+        if parsed.path.startswith("/snap/"):
+            token = parsed.path[len("/snap/") :].split(".")[0]
+            path = snap_path(token)
+            if not path:
+                self._send(404, "missing\n", "text/plain; charset=utf-8")
+                return
+            self._send(200, path.read_bytes(), "image/jpeg")
+            return
         if parsed.path == HEALTH_PATH:
             self._send(200, "ok\n", "text/plain; charset=utf-8")
             return
@@ -388,24 +580,50 @@ class NoseyHandler(BaseHTTPRequestHandler):
         if parsed.path not in ("/", "/index.php", "/index.html"):
             self._send(404, render_expired(self.strings))
             return
-        qs = parse_qs(parsed.query)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
         if "unattended" in qs or parsed.query == "unattended":
             nonce = nonce_new(self.files)
             url = self._base_url() + "?rand=" + nonce
-            self._send(200, render_unattended(url))
+            monitor = (qs.get("monitor") or [""])[0]
+            self._send(200, render_unattended(url, monitor=monitor))
+            return
+        if "desk" in qs or parsed.query == "desk":
+            self._send(200, render_desk())
             return
         rand = (qs.get("rand") or [""])[0]
         if rand:
-            if is_banned(self._ip(), self._cookie(), self.files):
-                self._send(200, render_oi(self.strings, self.spline_scene))
-                return
+            banned = is_banned(self._ip(), self._cookie(), self.files)
             if nonce_valid(rand, self.files):
+                LIVE.announce_scan(rand)
+                threading.Thread(
+                    target=camera_snap,
+                    args=(rand,),
+                    name="omanosey-snap",
+                    daemon=True,
+                ).start()
+                if banned:
+                    line = again_line(self._ip(), self.files, self.strings)
+                    self._send(
+                        200,
+                        render_oi(
+                            self.strings,
+                            self.spline_scene,
+                            line=line,
+                            nonce=rand,
+                        ),
+                    )
+                    return
                 self._send(200, render_form(rand, self.strings))
+                return
+            if banned:
+                line = again_line(self._ip(), self.files, self.strings)
+                self._send(200, render_oi(self.strings, self.spline_scene, line=line))
                 return
             self._send(404, render_expired(self.strings))
             return
         if is_banned(self._ip(), self._cookie(), self.files):
-            self._send(200, render_oi(self.strings, self.spline_scene))
+            line = again_line(self._ip(), self.files, self.strings)
+            self._send(200, render_oi(self.strings, self.spline_scene, line=line))
             return
         self._send(404, render_expired(self.strings))
 
@@ -421,14 +639,20 @@ class NoseyHandler(BaseHTTPRequestHandler):
         if not nonce_valid(nonce, self.files):
             self._send(404, render_expired(self.strings))
             return
-        if is_banned(self._ip(), self._cookie(), self.files):
-            self._send(200, render_oi(self.strings, self.spline_scene))
-            return
         if comment == "":
-            self._send(200, render_form(nonce, self.strings, nudge=True))
+            if is_banned(self._ip(), self._cookie(), self.files):
+                line = again_line(self._ip(), self.files, self.strings)
+                self._send(
+                    200,
+                    render_oi(self.strings, self.spline_scene, line=line, nonce=nonce),
+                )
+            else:
+                self._send(200, render_form(nonce, self.strings, nudge=True))
             return
-        save_reply(comment, nonce, self._ip(), self._ua(), self.files)
+        row = save_reply(comment, nonce, self._ip(), self._ua(), self.files)
+        nonce_burn(nonce, self.files)
         value = ban_visitor(self._ip(), self._ua(), self.files, self._secure())
+        LIVE.announce_reply(row["comment"], ts=row["ts"], ip=row["ip"], nonce=nonce)
         self._send(200, render_thanks(self.strings), extra=self._set_ban_cookie(value))
 
     def _static(self, path: str) -> None:
@@ -446,6 +670,69 @@ class NoseyHandler(BaseHTTPRequestHandler):
             return
         data = target.read_bytes()
         self._send(200, data, MIME.get(target.suffix, "application/octet-stream"))
+
+    def _websocket(self) -> None:
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            self._send(400, "websocket required\n", "text/plain; charset=utf-8")
+            return
+        self.close_connection = True
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept_key(key))
+        self.end_headers()
+        sock = self.connection
+        write_lock = threading.Lock()
+
+        def send_raw(frame: bytes) -> None:
+            with write_lock:
+                sock.sendall(frame)
+
+        def send(text: str) -> None:
+            send_raw(encode_frame(text))
+
+        def read_exact(n: int) -> bytes:
+            buf = b""
+            while len(buf) < n:
+                chunk = sock.recv(n - len(buf))
+                if not chunk:
+                    return b""
+                buf += chunk
+            return buf
+
+        client = None
+        try:
+            first = read_frame(read_exact)
+            if first is None or first[0] != "text":
+                return
+            message = json.loads(first[1] or "{}")
+            role = message.get("role") if isinstance(message, dict) else ""
+            if role not in ("screen", "desk", "visitor"):
+                return
+            ticket = str(message.get("nonce") or "") if role == "visitor" else ""
+            client = LIVE.add(role, ticket, send)
+            while True:
+                incoming = read_frame(read_exact)
+                if incoming is None:
+                    break
+                kind, payload = incoming
+                if kind == "ping":
+                    send_raw(encode_pong(payload if isinstance(payload, bytes) else b""))
+                    continue
+                if kind != "text" or not payload:
+                    continue
+                try:
+                    body = json.loads(str(payload))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(body, dict) and body.get("type") == "audio":
+                    LIVE.relay_audio(client, str(body.get("mime") or ""), str(body.get("data") or ""))
+        except Exception:
+            return
+        finally:
+            if client is not None:
+                LIVE.remove(client)
 
 
 def make_server(bind: str, port: int, public_base: str = "", spline: str = "") -> ThreadingHTTPServer:
@@ -525,7 +812,12 @@ def kiosk_url() -> str:
     public = probe_public(cfg["public_url"])
     if public:
         return public
-    start_background(cfg["bind"], int(cfg["port"]), spline=cfg.get("spline_scene") or "")
+    start_background(
+        cfg["bind"],
+        int(cfg["port"]),
+        public_base=str(cfg.get("phone_base") or ""),
+        spline=cfg.get("spline_scene") or "",
+    )
     return f"http://127.0.0.1:{int(cfg['port'])}/?unattended"
 
 
@@ -537,14 +829,13 @@ def status_payload() -> dict[str, Any]:
         "ok": True,
         "idle": bool(cfg["idle"]),
         "public_url": cfg["public_url"],
+        "phone_base": cfg.get("phone_base") or "",
         "public_live": bool(public),
         "kiosk_url": public or (f"http://127.0.0.1:{int(cfg['port'])}/?unattended" if local else ""),
         "local": local,
         "port": int(cfg["port"]),
         "lan_ip": lan_ip(),
         "plugin_root": str(plugin_root()),
-        "debug_log": str(log_path()),
-        "last_events": recent_events(8),
     }
 
 
@@ -563,6 +854,11 @@ def main(argv: list[str] | None = None) -> int:
     set_p = sub.add_parser("set", help="write config keys")
     set_p.add_argument("--idle", choices=["true", "false"], default=None)
     set_p.add_argument("--public-url", default=None)
+    set_p.add_argument(
+        "--phone-base",
+        default=None,
+        help="phone-facing origin for QR burn links (e.g. Tailscale Serve HTTPS)",
+    )
     set_p.add_argument("--port", type=int, default=None)
 
     args = parser.parse_args(argv)
@@ -573,7 +869,7 @@ def main(argv: list[str] | None = None) -> int:
         serve_forever(
             bind,
             port,
-            public_base=args.public_base,
+            public_base=args.public_base or str(cfg.get("phone_base") or ""),
             spline=args.spline or cfg.get("spline_scene") or "",
         )
         return 0
@@ -589,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
             update["idle"] = args.idle == "true"
         if args.public_url is not None:
             update["public_url"] = args.public_url
+        if args.phone_base is not None:
+            update["phone_base"] = args.phone_base
         if args.port is not None:
             update["port"] = args.port
         print(json.dumps(save_config(update)))

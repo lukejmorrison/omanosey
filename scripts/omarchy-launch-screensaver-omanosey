@@ -7,10 +7,28 @@ plugin=$(CDPATH= cd -- "$here/.." && pwd)
 python=${OMANOSEY_PYTHON:-/usr/bin/python3}
 window="$plugin/backend/window.py"
 server="$plugin/backend/server.py"
+events=
 
 event() {
   "$python" "$plugin/backend/debuglog.py" event "$@" || true
 }
+
+# Socat/Hypr event watching can leave the launching TTY in a weird keymap mode
+# so arrow keys print as ^[[A until reset. Always restore on the way out.
+restore_tty() {
+  if [[ -n ${events:-} ]]; then
+    eval "exec ${events}<&-" 2>/dev/null || true
+    events=
+  fi
+  if [[ -t 0 ]]; then
+    stty sane 2>/dev/null || true
+  fi
+  if [[ -t 1 ]]; then
+    # Normal cursor keys, no mouse tracking, no bracketed paste, leave alt screen.
+    printf '\e[?1l\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?2004l\e[?1049l' 2>/dev/null || true
+  fi
+}
+trap restore_tty EXIT
 
 pgrep -f '[o]rg.omarchy.screensaver' >/dev/null 2>&1 && exit 0
 
@@ -34,19 +52,25 @@ if [[ $debug == 1 ]]; then
   echo "omanosey: debug hold on; Esc dismisses. Log: ${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/omanosey/screensaver.log" >&2
 fi
 
+# Warm the local webcam so the LED is on while idle, and a scan can freeze a frame.
+"$python" "$plugin/backend/camera.py" start >/dev/null 2>&1 && event camera-start || event camera-start-failed
+
 hypr_focus_monitor() {
   hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 || hyprctl dispatch focusmonitor "$1" >/dev/null
 }
 
 hypr_exec() {
   local command
-  printf -v command '%q ' "$@"
+  # Force XWayland for the GTK WebKit window (native Wayland hits Gdk error 71).
+  # Disable WebKit compositing so the QR actually paints under XWayland.
+  printf -v command '%q ' env -u WAYLAND_DISPLAY GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 "$@"
   hyprctl dispatch "hl.dsp.exec_cmd([[$command]])" >/dev/null 2>&1 || hyprctl dispatch exec -- bash -lc "$command" >/dev/null
 }
 
 SOCKET="$XDG_RUNTIME_DIR/hypr/${HYPRLAND_INSTANCE_SIGNATURE:-}/.socket2.sock"
 if [[ -S $SOCKET ]]; then
-  exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
+  # Keep socat quiet; Broken pipe on EXIT is normal once we close the reader.
+  exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET" 2>/dev/null)
 else
   events=
 fi
@@ -62,14 +86,18 @@ wait_for_screensaver_window() {
 
 focused=$(omarchy-hyprland-monitor-focused 2>/dev/null || true)
 
-for m in $(hyprctl monitors -j | jq -r '.[].name'); do
+# HEADLESS outputs (Sunshine/remote) never map a real window; a failing one
+# tears down every screensaver via kill_all. Skip disabled and HEADLESS.
+for m in $(hyprctl monitors -j | jq -r '.[] | select(.disabled != true) | select(.name | startswith("HEADLESS") | not) | .name'); do
   event focus-monitor monitor="$m"
   hypr_focus_monitor "$m"
+  # Tag each kiosk with its monitor so only one shows the QR at a time.
+  mon_url="${url}&monitor=$(printf '%s' "$m" | jq -sRr @uri)"
   event spawn monitor="$m" debug="$debug"
   if [[ $debug == 1 ]]; then
-    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m" --debug
+    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$mon_url" --monitor "$m" --debug
   else
-    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$url" --monitor "$m"
+    hypr_exec "$python" "$window" --class=org.omarchy.screensaver --url "$mon_url" --monitor "$m"
   fi
   if wait_for_screensaver_window; then
     event window-mapped monitor="$m"

@@ -74,11 +74,29 @@ class NoseyServerTests(unittest.TestCase):
         self.assertIn("text/css", headers.get("Content-Type", ""))
 
     def test_unattended_qr_page(self):
-        status, body, _ = self.request("GET", "/?unattended")
+        status, body, _ = self.request("GET", "/?unattended&monitor=DP-1")
         self.assertEqual(status, 200)
         self.assertIn(b'id="qr"', body)
+        self.assertIn(b'id="matrix"', body)
         self.assertIn(b"?rand=", body)
-        self.assertIn(b"Leave this on screen", body)
+        self.assertIn(b"matrix.js", body)
+        self.assertNotIn(b"Leave this on screen", body)
+        self.assertNotIn(b"qrurl", body)
+        self.assertIn(b"DP-1", body)
+
+    def test_screen_lead_rotates(self):
+        status, body, _ = self.request("GET", "/screen-lead?monitor=DP-1")
+        self.assertEqual(status, 200)
+        data = __import__("json").loads(body)
+        self.assertIn("lead", data)
+        self.assertIn("show", data)
+        self.assertEqual(data["period"], 15)
+        self.request("GET", "/screen-lead?monitor=HDMI-A-1")
+        status, body, _ = self.request("GET", "/screen-lead?monitor=DP-1")
+        data = __import__("json").loads(body)
+        self.assertEqual(sorted(data["monitors"]), ["DP-1", "HDMI-A-1"])
+        self.assertIn(data["lead"], data["monitors"])
+        self.assertEqual(data["show"], data["lead"] == "DP-1")
 
     def test_expired_rand(self):
         status, body, _ = self.request("GET", "/?rand=" + ("a" * 32))

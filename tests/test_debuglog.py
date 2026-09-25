@@ -22,10 +22,14 @@ class DismissActionTests(unittest.TestCase):
         self.assertEqual(debuglog.dismiss_action(kind="focus-out", armed=False, debug=False), "ignore")
 
     def test_armed_input_quits(self):
-        self.assertEqual(debuglog.dismiss_action(kind="motion", armed=True, debug=False), "quit")
         self.assertEqual(debuglog.dismiss_action(kind="button", armed=True, debug=False), "quit")
         self.assertEqual(debuglog.dismiss_action(kind="key", armed=True, debug=False, key="space"), "quit")
-        self.assertEqual(debuglog.dismiss_action(kind="focus-out", armed=True, debug=False), "quit")
+
+    def test_motion_and_focus_never_quit(self):
+        self.assertEqual(debuglog.dismiss_action(kind="motion", armed=True, debug=False), "ignore")
+        self.assertEqual(debuglog.dismiss_action(kind="focus-out", armed=True, debug=False), "ignore")
+        self.assertEqual(debuglog.dismiss_action(kind="motion", armed=True, debug=True), "hold")
+        self.assertEqual(debuglog.dismiss_action(kind="focus-out", armed=True, debug=True), "hold")
 
     def test_debug_holds_until_escape(self):
         self.assertEqual(debuglog.dismiss_action(kind="motion", armed=True, debug=True), "hold")

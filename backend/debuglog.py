@@ -54,13 +54,18 @@ def format_event(kind: str, **fields: Any) -> str:
 def dismiss_action(*, kind: str, armed: bool, debug: bool, key: str = "") -> str:
     """Return quit, hold, or ignore.
 
-    Unarmed input is ignored (grace period). Debug mode records the same input
-    but keeps the window up unless the key is Escape. Signals always quit.
+    Only a key press or mouse click dismisses after the grace period. Pointer
+    motion and focus-out are logged but never quit. Debug mode holds until Esc.
+    Signals always quit.
     """
     if kind == "signal":
         return "quit"
     if debug and key.lower() in {"escape", "esc"}:
         return "quit"
+    if kind in {"motion", "focus-out"}:
+        if debug and armed:
+            return "hold"
+        return "ignore"
     if not armed:
         return "ignore"
     if debug:

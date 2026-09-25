@@ -18,9 +18,22 @@ if _BACKEND_DIR not in sys.path:
 
 from debuglog import dismiss_action, write_event  # noqa: E402
 
+# GTK3 WebKit on native Wayland hits Error 71 (protocol error) on this Hyprland
+# setup. Force XWayland unless the user overrides GDK_BACKEND.
+if not os.environ.get("OMANOSEY_GDK_BACKEND"):
+    os.environ["GDK_BACKEND"] = "x11"
+else:
+    os.environ["GDK_BACKEND"] = os.environ["OMANOSEY_GDK_BACKEND"]
+if os.environ.get("GDK_BACKEND") == "x11":
+    os.environ.pop("WAYLAND_DISPLAY", None)
+    # XWayland + WebKit HW compositing often paints a blank white view even when
+    # the DOM (and QR probe) succeed. Software rendering keeps pixels on screen.
+    os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
+
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 
@@ -40,8 +53,15 @@ def hide_cursor(hidden: bool) -> None:
 
 def kill_all() -> None:
     hide_cursor(False)
-    # Same pattern as stock omarchy-screensaver: one dismiss tears down every monitor.
-    _run(["pkill", "-f", "[o]rg.omarchy.screensaver"])
+    try:
+        from camera import stop as camera_stop
+
+        camera_stop()
+    except Exception:
+        pass
+    # Match window.py argv only — a bare class string also hits launchers/shells that
+    # mention org.omarchy.screensaver in their command line.
+    _run(["pkill", "-f", "backend/window.py .*--class=org.omarchy.screensaver"])
 
 
 def _load_event_name(event: object) -> str:
@@ -59,10 +79,17 @@ def _load_event_name(event: object) -> str:
 
 
 class ScreensaverWindow(Gtk.Window):
-    def __init__(self, url: str, *, debug: bool = False, monitor: str = "") -> None:
+    def __init__(self, url: str, *, debug: bool = False, monitor: str = "", wm_class: str = APP_CLASS) -> None:
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
-        self.set_title(APP_CLASS)
+        self.set_title(wm_class)
+        # XWayland ignores Gdk.set_program_class for WM_CLASS; without this Hypr
+        # sees class "Window.py" and skips the screensaver fullscreen rules.
+        try:
+            self.set_wmclass(wm_class, wm_class)
+        except Exception:
+            pass
         self.set_decorated(False)
+        # Hypr windowrules already force fullscreen for org.omarchy.screensaver.
         self.set_keep_above(True)
         self.fullscreen()
         self._url = url
@@ -94,6 +121,16 @@ class ScreensaverWindow(Gtk.Window):
         settings = view.get_settings()
         settings.set_enable_javascript(True)
         settings.set_allow_file_access_from_file_urls(True)
+        try:
+            settings.set_hardware_acceleration_policy(
+                WebKit2.HardwareAccelerationPolicy.NEVER
+            )
+        except Exception:
+            pass
+        try:
+            view.set_background_color(Gdk.RGBA(red=0.04, green=0.06, blue=0.12, alpha=1.0))
+        except Exception:
+            pass
         view.set_hexpand(True)
         view.set_vexpand(True)
         view.connect("load-changed", self._on_load_changed)
@@ -308,6 +345,16 @@ class ScreensaverWindow(Gtk.Window):
         if self._closed:
             return
         self._closed = True
+        # Debug hold: close only this window so a bad monitor cannot wipe the
+        # others via kill_all while we are diagnosing.
+        if self.debug:
+            hide_cursor(False)
+            try:
+                Gtk.Window.destroy(self)
+            except Exception:
+                pass
+            Gtk.main_quit()
+            return
         kill_all()
         Gtk.main_quit()
 
@@ -326,10 +373,11 @@ def main(argv: list[str] | None = None) -> int:
 
     GLib.set_prgname(args.wm_class)
     Gdk.set_program_class(args.wm_class)
-    os.environ["GDK_BACKEND"] = os.environ.get("GDK_BACKEND", "wayland")
 
     hide_cursor(not args.debug)
-    win = ScreensaverWindow(args.url, debug=args.debug, monitor=args.monitor)
+    win = ScreensaverWindow(
+        args.url, debug=args.debug, monitor=args.monitor, wm_class=args.wm_class
+    )
     win.show_all()
 
     def _signal(signum: int, _frame: object) -> None:
