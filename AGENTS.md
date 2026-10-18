@@ -14,3 +14,7 @@
 - Screensaver launch warms the local USB webcam (`backend/camera.py`, default `/dev/video0`); a QR scan freezes a JPEG under `private/snaps/` and the visitor page polls `/snap/<nonce>.jpg` to show them.
 - Local installs often symlink this checkout as `~/.config/omarchy/plugins/wizwam.omanosey` and may point `~/.local/bin/omarchy-launch-screensaver` at OmaNosey's dispatcher.
 - Screensaver diagnostics: `omarchy-launch-screensaver force debug` (or panel **Debug preview**) holds the QR open until Esc; mouse/focus/other keys are logged and ignored. Lifecycle lines go to `~/.local/state/omarchy/omanosey/screensaver.log` — after a flash-and-gone idle close, `tail -n 40` that file (or `/usr/bin/python3 backend/debuglog.py tail`) and look for `action=quit` (`motion`/`key`/`button`/`focus-out`/`signal`). Pulling the plugin checkout picks this up without reinstall; rescan plugins or restart the shell if Panel.qml has no debug row.
+
+## README
+
+- This repo is public. When a change alters anything a user can see, add or refresh a screenshot in README.md (images in docs/screenshots/, relative links). The README is the marketing.
